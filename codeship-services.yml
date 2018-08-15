@@ -1,0 +1,54 @@
+frontend-lint:
+  build:
+    image: angular-testing-frontend
+    context: .
+    dockerfile: Dockerfile
+  cached: true
+frontend-unit-test:
+  build:
+    image: angular-testing-frontend
+    context: .
+    dockerfile: Dockerfile
+  cached: true
+  environment:
+    - KARMA_BROWSERS=selenium_chrome
+    - KARMA_SINGLE_RUN=true
+    - SELENIUM_HOST=selenium-unit-test
+  depends_on:
+    - selenium-unit-test
+frontend-e2e-test:
+  build:
+    image: angular-testing-frontend
+    context: .
+    dockerfile: Dockerfile
+  cached: true
+  environment:
+    - ELASTICSEARCH_URL=http://elasticsearch:9200/
+    - SELENIUM_HOST=selenium-e2e-test
+  depends_on:
+    - selenium-e2e-test
+    - backend
+backend:
+  build:
+    image: angular-testing-backend
+    context: backend
+    dockerfile: Dockerfile
+  cached: true
+  environment:
+    - ELASTICSEARCH_URL=http://elasticsearch:9200/
+  depends_on:
+    - elasticsearch
+selenium-unit-test:
+  image: selenium/standalone-chrome:3.12.0
+  cached: true
+selenium-e2e-test:
+  image: selenium/standalone-chrome:3.12.0
+  cached: true
+  depends_on:
+    - backend
+elasticsearch:
+  image: docker.elastic.co/elasticsearch/elasticsearch-oss:6.2.4
+  environment:
+    - discovery.type=single-node
+    - bootstrap.memory_lock=true
+    - "ES_JAVA_OPTS=-Xms512m -Xmx512m"

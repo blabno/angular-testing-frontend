@@ -1,0 +1,9 @@
+- name: lint
+  service: frontend-lint
+  command: npm run lint
+- name: unit-tests
+  service: frontend-unit-test
+  command: npm run test
+- name: e2e-tests
+  service: frontend-e2e-test
+  command: node e2e-ci.js
