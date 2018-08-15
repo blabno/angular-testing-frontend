@@ -1,14 +1,18 @@
 import { AppPage } from './app.po';
+import * as seeder from '../../backend/seed/seeder.js';
 
-describe('workspace-project App', () => {
+describe('App', () => {
   let page: AppPage;
+  let quoteForToday;
 
-  beforeEach(() => {
+  beforeAll(() => {
     page = new AppPage();
+    quoteForToday = `${Math.random()}`;
+    return seeder.seedFixture({ quote: [{ id: 'quote-for-today', text: quoteForToday }] });
   });
 
-  it('should display welcome message', () => {
+  it('should display quote for today fetched from the backend', () => {
     page.navigateTo();
-    expect(page.getParagraphText()).toEqual('Welcome to angular-testing-frontend!');
+    expect(page.getQuoteForToday()).toEqual(`Quote for today: "${quoteForToday}"`);
   });
 });
