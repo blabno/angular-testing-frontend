@@ -1,0 +1,14 @@
+version: '2'
+services:
+  frontend:
+    build:
+      context: .
+    command: sh -c "npm run lint && npm test"
+    environment:
+      - KARMA_BROWSERS=selenium_chrome
+      - KARMA_SINGLE_RUN=true
+      - SELENIUM_HOST=selenium
+    depends_on:
+      - selenium
+  selenium:
+    image: selenium/standalone-chrome:3.12.0
