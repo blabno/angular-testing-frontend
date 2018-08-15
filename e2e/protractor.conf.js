@@ -3,6 +3,12 @@
 
 const { SpecReporter } = require('jasmine-spec-reporter');
 
+const getIp = require('../getIp');
+
+const address = process.env.SELENIUM_HOST && getIp() || 'localhost';
+
+const directConnect = !process.env.SELENIUM_HOST;
+
 exports.config = {
   allScriptsTimeout: 11000,
   specs: [
@@ -12,8 +18,9 @@ exports.config = {
   capabilities: {
     'browserName': 'chrome'
   },
-  directConnect: true,
-  baseUrl: 'http://localhost:4200/',
+  directConnect,
+  seleniumAddress: `http://${process.env.SELENIUM_HOST || 'localhost'}:4444/wd/hub`,
+  baseUrl: `http://${address}:4200/`,
   framework: 'jasmine',
   jasmineNodeOpts: {
     showColors: true,
