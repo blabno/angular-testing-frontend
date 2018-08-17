@@ -31,9 +31,11 @@ codeship.aes
 codeship.env
 /connect.lock
 /coverage
+/reports
 /libpeerconnection.log
 npm-debug.log
 yarn-error.log
+stryker.log
 testem.log
 /typings
 
