@@ -27,6 +27,8 @@
 
 # misc
 /.sass-cache
+codeship.aes
+codeship.env
 /connect.lock
 /coverage
 /libpeerconnection.log

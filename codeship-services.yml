@@ -14,6 +14,7 @@ frontend-unit-test:
     - KARMA_BROWSERS=selenium_chrome
     - KARMA_SINGLE_RUN=true
     - SELENIUM_HOST=selenium-unit-test
+  encrypted_env_file: codeship.env.encrypted
   depends_on:
     - selenium-unit-test
 frontend-e2e-test:

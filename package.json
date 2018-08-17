@@ -2,6 +2,8 @@
   "name": "angular-testing-frontend",
   "version": "0.0.0",
   "scripts": {
+    "coverage": "ng test --code-coverage --watch=false",
+    "postcoverage": "if test ${CI_NAME+x} ; then COVERALLS_SERVICE_NAME=Codeship COVERALLS_GIT_COMMIT=$CI_COMMIT_ID COVERALLS_SERVICE_JOB_ID=$CI_BUILD_ID cat ./coverage/lcov.info | ./node_modules/coveralls/bin/coveralls.js; fi",
     "ng": "ng",
     "start": "ng serve",
     "build": "ng build",
@@ -34,6 +36,7 @@
     "@types/jasminewd2": "~2.0.3",
     "@types/node": "~8.9.4",
     "codelyzer": "~4.2.1",
+    "coveralls": "3.0.2",
     "jasmine-core": "~2.99.1",
     "jasmine-spec-reporter": "~4.2.1",
     "karma": "~1.7.1",

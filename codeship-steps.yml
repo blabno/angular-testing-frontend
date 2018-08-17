@@ -3,7 +3,7 @@
   command: npm run lint
 - name: unit-tests
   service: frontend-unit-test
-  command: npm run test
+  command: npm run coverage
 - name: e2e-tests
   service: frontend-e2e-test
   command: node e2e-ci.js
