@@ -1,0 +1,1218 @@
+= Angular testing
+:sectlinks:
+:sectanchors:
+:toc:
+:source-highlighter: pygments
+
+image:https://app.codeship.com/projects/8c70b1a0-85b6-0136-b25d-76b7043fe8ef/status?branch=master[Codeship Status for blabno/angular-testing-frontend,link=https://app.codeship.com/projects/302413]
+image:https://coveralls.io/repos/github/blabno/angular-testing-frontend/badge.svg?branch=master[Coverage Status,link=https://coveralls.io/github/blabno/angular-testing-frontend?branch=master]
+
+== Introduction
+
+In this tutorial, you will learn how to test Angular6 app on all levels and integrate those tests with CI.
+
+Tests will cover:
+
+- frontend unit tests
+- e2e tests with real backend
+
+Apart from that, you will see how to generate test coverage report and verify the real coverage with mutation tests.
+
+The overall goal is to present how strong can the app be tested and how well can you protect it from bugs.
+
+== About the project
+
+The application fetches quote for today from the backend and displays it to the user.
+The whole project consists of frontend written in Angular 6 and backend written in NodeJS.
+The backend stores the quote in ElasticSearch.
+
+Both frontend and backend repositories are available here:
+
+* https://github.com/blabno/angular-testing-frontend
+* https://github.com/blabno/angular-testing-backend
+
+Look at the history of those repositories to see what changes were necessary for each step.
+
+== Prerequisites
+
+- NodeJS 8+
+- Angular CLI
+- Docker
+- docker-compose
+
+This article is written using:
+
+- Angular CLI: 6.0.8
+- Node: 8.11.1
+- Angular: 6.1.2
+- Docker: 18.03.1-ce, build 9ee9f40
+- docker-compose:  1.19.0, build 9e633ef
+
+== The backend
+
+The backend's source code is available at https://github.com/blabno/angular-testing-backend.
+
+It is a simple web server using HapiJS, and it serves the quote for today.
+The quote is stored in ElasticSearch.
+The project comes with scripts to seed database with sample data as well as integration tests.
+
+== Generate standard angular frontend
+
+Inside `angular-testing` generate the frontend using Angular CLI:
+
+    ng new angular-testing-frontend
+
+== Implement frontend logic
+
+This simple app needs only one component to fetch and display data so we can reuse `app.component.ts`.
+It is a good practice to separate data access logic from component logic, so `AppComponent` should delegate that job to `ApiService`.
+
+Let's go through the code.
+
+.*src/app/app.component.html*
+[source, html]
+----
+<div style="text-align:center">
+  <h1 *ngIf="viewready">Quote for today: "{{quote}}"</h1>
+  <h1 *ngIf="!viewready">Loading...</h1>
+</div>
+----
+
+While the user waits for data being fetched, they should see `Loading...` text.
+Once the view becomes ready (data arrived), the user should see the quote for today.
+
+.*src/app/app.component.ts*
+[source, typescript]
+----
+import { Component, OnInit } from '@angular/core';
+import { ApiService } from './api.service';
+
+@Component({
+  selector: 'app-root',
+  templateUrl: './app.component.html',
+  styleUrls: ['./app.component.css']
+})
+export class AppComponent implements OnInit {
+
+  quote: string;
+  viewready = false;
+
+  constructor(private api: ApiService) {
+  }
+
+  ngOnInit() {
+    this.api.getQuoteForToday().subscribe(quote => this.quote = quote, null, () => this.viewready = true);
+  }
+}
+----
+
+When Angular initiates the component, it should fetch quote for today from the backend using `ApiService`.
+Once the data arrives, the `viewready` property should be set to true so that the loading indicator can hide.
+
+.*src/app/api.service.ts*
+[source, typescript]
+----
+import { HttpClient } from '@angular/common/http';
+import { Injectable } from '@angular/core';
+import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
+import { environment } from '../environments/environment';
+
+class Quote {
+  text: string
+}
+
+@Injectable({ providedIn: 'root' })
+export class ApiService {
+
+  constructor(private http: HttpClient) {
+  }
+
+  getQuoteForToday(): Observable<string> {
+    return this.http.get<Quote>(`${environment.backendUrl}/api/quote-for-today`)
+      .pipe(map(quote => quote.text));
+  }
+}
+----
+
+`ApiService` is a standard service for fetching data from the backend. We use variables from `environment.ts` file so that we could
+easily switch configuration depending if we are running those tests locally or in CI or any other environment.
+
+.*src/app/app.module.ts*
+[source, typescript]
+----
+import { HttpClientModule } from '@angular/common/http';
+import { BrowserModule } from '@angular/platform-browser';
+import { NgModule } from '@angular/core';
+
+import { AppComponent } from './app.component';
+
+@NgModule({
+  declarations: [
+    AppComponent
+  ],
+  imports: [
+    BrowserModule,
+    HttpClientModule
+  ],
+  providers: [],
+  bootstrap: [AppComponent]
+})
+export class AppModule {
+}
+----
+
+We need to add `HttpClientModule` to imports since we want to use `HttpClient` to communicate with the backend.
+
+.*src/environments/environment.prod.ts*
+[source, typescript]
+----
+export const environment = {
+  production: true,
+  backendUrl: 'https://angular-testing-frontend.herokuapp.com'
+};
+----
+
+Add `backendUrl`. We won't run tests against production, but for purity, we'll provide some value.
+
+.*src/environments/environment.ts*
+[source, typescript]
+----
+export const environment = {
+  production: true,
+  backendUrl: 'http://localhost:3000'
+};
+----
+
+Add `backendUrl`. This is default port for our backend running locally.
+
+== Unit tests for AppComponent
+
+Now it's time to write tests for the `AppComponent`.
+
+.*app.component.spec.ts*
+[source, typescript]
+----
+import { TestBed } from '@angular/core/testing';
+import { AppComponent } from './app.component';
+import { ApiService } from './api.service';
+import { NEVER, of } from 'rxjs';
+
+describe('AppComponent', () => {
+  let apiServiceStub;
+  let apiReply;
+  beforeEach(() => {
+    apiServiceStub = jasmine.createSpyObj('ApiService', ['getQuoteForToday']);
+    apiReply = `${Math.random()}`;
+    apiServiceStub.getQuoteForToday.and.returnValue(of(apiReply));
+    TestBed.configureTestingModule({
+      declarations: [AppComponent],
+      providers: [{ provide: ApiService, useValue: apiServiceStub }]
+    }).compileComponents();
+  });
+  it('should create the app', () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const app = fixture.debugElement.componentInstance;
+    expect(app).toBeTruthy();
+  });
+  it('should fetch quote for today from the backend', () => {
+    const fixture = TestBed.createComponent(AppComponent);
+    const app = fixture.debugElement.componentInstance;
+    expect(app.quote).toBeUndefined();
+    fixture.detectChanges();
+    expect(apiServiceStub.getQuoteForToday).toHaveBeenCalledTimes(1);
+    expect(app.quote).toEqual(apiReply);
+  });
+  describe('before reply arrives from the apiService', () => {
+    it('should render "Loading..." text', () => {
+      const fixture = TestBed.createComponent(AppComponent);
+      const compiled = fixture.debugElement.nativeElement;
+      apiServiceStub.getQuoteForToday.and.returnValue(NEVER);
+      fixture.detectChanges();
+      expect(compiled.textContent.trim()).toEqual('Loading...');
+    });
+  });
+  describe('when reply arrives from the apiService', () => {
+    it('should render quote in a h1 tag', () => {
+      const fixture = TestBed.createComponent(AppComponent);
+      fixture.detectChanges();
+      const compiled = fixture.debugElement.nativeElement;
+      expect(compiled.textContent.trim()).toEqual(`Quote for today: "${apiReply}"`);
+      expect(compiled.querySelector('h1').textContent.trim()).toEqual(`Quote for today: "${apiReply}"`);
+    });
+  });
+});
+----
+
+Run unit tests to see if they pass:
+
+    ng test --watch=false
+
+== Add backend submodule to the frontend project
+
+When you run your app locally, you can keep frontend and backend in separate folders and separate git repositories.
+However, we want to test our app end-to-end to see if frontend and backend communicate properly.
+
+NOTE: This allows us to eliminate as much manual testing as possible and automate most of the scenarios.
+
+We want those tests to be run for each pull request. To make integration with CI easier and to allow developers
+to run those tests in the same environment as in CI we will run them inside Docker.
+To do that we will have to start backend together with its dependency, the ElasticSearch, and frontend.
+
+Because CI operates in the context of a single repo, we add backend as a submodule of the frontend.
+That means that those repositories are still separate, but it's now possible to check out both in one shot.
+
+Let's register backend as a submodule of our frontend. Run this inside `angular-testing-frontend` directory:
+
+    git submodule add -b master --name backend https://github.com/blabno/angular-testing-backend.git
+    cd backend
+    yarn
+
+Now you can start the backend:
+
+    cd backend
+    docker-compose up app
+
+If you type `docker ps` you should see both the backend and ElasticSearch containers running:
+
+```
+CONTAINER ID        IMAGE                                                     COMMAND                  CREATED             STATUS              PORTS                                            NAMES
+bee835505d58        node:8.9                                                  "bash -c 'yarn && ya…"   2 minutes ago       Up 2 minutes        0.0.0.0:3000->3000/tcp                           backend_app_1
+25e8d93ad7c6        docker.elastic.co/elasticsearch/elasticsearch-oss:6.2.4   "/usr/local/bin/dock…"   2 minutes ago       Up 2 minutes        0.0.0.0:9200->9200/tcp, 0.0.0.0:9300->9300/tcp   backend_es_1
+```
+
+Start the frontend (inside `angular-testing-frontend` directory):
+
+    ng serve
+
+Let's go to http://localhost:4200. You should see `Quote for today: ""`.
+That's because there are no data in ElasticSearch yet. Let's seed sample data:
+
+    cd backend
+    docker-compose exec app yarn seed
+
+Refresh the browser, and you should see `Quote for today: "Today is different"`.
+
+Time for the e2e test.
+
+.*e2e/src/app.e2e-spec.ts*
+[source, typescript]
+----
+import { AppPage } from './app.po';
+import * as seeder from '../../backend/seed/seeder.js';
+
+describe('App', () => {
+  let page: AppPage;
+  let quoteForToday;
+
+  beforeAll(() => {
+    page = new AppPage();
+    quoteForToday = `${Math.random()}`;
+    return seeder.seedFixture({ quote: [{ id: 'quote-for-today', text: quoteForToday }] });
+  });
+
+  it('should display quote for today fetched from the backend', () => {
+    page.navigateTo();
+    expect(page.getQuoteForToday()).toEqual(`Quote for today: "${quoteForToday}"`);
+  });
+});
+----
+
+Since backend is now being checked out together with frontend as a subdirectory, we can use backend's seeder
+also in e2e tests of the frontend. Look above, the syntax for seeding data is identical as in the backend tests.
+We are really seeding ElasticSearch here.
+
+.*e2e/src/app.po.ts*
+[source, typescript]
+----
+import { browser, by, element } from 'protractor';
+
+export class AppPage {
+  navigateTo() {
+    return browser.get('/');
+  }
+
+  getQuoteForToday() {
+    return element(by.css('app-root h1')).getText();
+  }
+}
+----
+
+This is page fragment for encapsulating logic for interaction between tests and our page.
+We've only changed `getParagraphText` to `getQuoteForToday`.
+
+.*e2e/src/index.e2e-spec.ts*
+[source, typescript]
+----
+import * as seeder from '../../backend/seed/seeder';
+import * as waitForDependencies from '../../backend/test/waitForDependencies';
+
+const INIT_TESTS_TIMEOUT = 60000;
+
+beforeAll(() => waitForDependencies(INIT_TESTS_TIMEOUT));
+beforeAll(() => seeder.recreateIndexes());
+----
+
+Just like with backend tests we need to wait until ElasticSearch becomes ready and create ElasticSearch indexes.
+It's just like creating a database schema in relational databases.
+
+Try running tests now. If you are still running `ng serve` run:
+
+    ng e2e --dev-server-target
+
+If you have already killed `ng serve` the run:
+
+    ng e2e
+
+It automatically serves our app's files.
+
+== Lint and unit tests in docker-compose
+
+Now it's time for some configuration gymnastics. We want our tests to run inside Docker. Unit tests use Karma,
+which starts and runs tests inside a browser. That is a lot of dependencies (browser, WebDriver, etc.) to include
+in our docker image. Luckily Selenium provides us with containers ready for that task, so for unit tests and lint, we need only 2 containers one with WebDriver and another with the frontend.
+
+.*Dockerfile*
+
+This is for building Docker image of the frontend.
+
+[source, text]
+----
+FROM node:8.9
+
+WORKDIR /app
+CMD node app/web.js
+
+COPY package.json package-lock.json ./
+RUN npm install --progress=false
+
+COPY . .
+----
+
+.*.dockerignore*
+[source, text]
+----
+# See http://help.github.com/ignore-files/ for more about ignoring files.
+
+.dockerignore
+.editorconfig
+.git
+.gitignore
+.gitmodules
+Dockerfile
+README.md
+docker-compose.yml
+
+# compiled output
+dist
+tmp
+out-tsc
+
+# dependencies
+node_modules
+
+# IDEs and editors
+.idea
+*.iml
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# misc
+.sass-cache
+connect.lock
+coverage
+libpeerconnection.log
+npm-debug.log
+yarn-error.log
+testem.log
+typings
+
+# System Files
+.DS_Store
+Thumbs.db
+----
+
+We keep our image as small as possible, so we use this file to exclude whatever is not needed.
+
+.*docker-compose.yml*
+[source, yaml]
+----
+version: '2'
+services:
+  frontend:
+    build:
+      context: .
+    command: sh -c "npm run lint && npm test"
+    environment:
+      - KARMA_BROWSERS=selenium_chrome
+      - KARMA_SINGLE_RUN=true
+      - SELENIUM_HOST=selenium
+    depends_on:
+      - selenium
+  selenium:
+    image: selenium/standalone-chrome:3.12.0
+----
+Karma will run inside `frontend` container and will communicate with WebDriver and browser that will run in `selenium` container.
+That requires some tuning of `src/karma.conf.js`.
+
+.*src/karma.conf.js*
+[source, javascript]
+----
+// Karma configuration file, see link for more information
+// https://karma-runner.github.io/1.0/config/configuration-file.html
+
+const getIp = require('../getIp');
+
+module.exports = function (config) {
+  config.set({
+    hostname: getIp() || 'localhost',
+    basePath: '',
+    frameworks: ['jasmine', '@angular-devkit/build-angular'],
+    plugins: [
+      require('karma-jasmine'),
+      require('karma-chrome-launcher'),
+      require('karma-webdriver-launcher'),
+      require('karma-jasmine-html-reporter'),
+      require('karma-coverage-istanbul-reporter'),
+      require('@angular-devkit/build-angular/plugins/karma')
+    ],
+    client: {
+      clearContext: false // leave Jasmine Spec Runner output visible in browser
+    },
+    coverageIstanbulReporter: {
+      dir: require('path').join(__dirname, '../coverage'),
+      reports: ['html', 'lcovonly'],
+      fixWebpackSourcePaths: true
+    },
+    customLaunchers: {
+      selenium_chrome: {
+        base: 'WebDriver',
+        config: {
+          desiredCapabilities: {
+            //capabilities of driver
+          },
+          host: process.env.SELENIUM_HOST || 'localhost',
+          port: 4444,
+          path: '/wd/hub'
+        },
+        name: 'Karma',
+        browserName: 'chrome'
+      }
+    },
+    reporters: ['progress', 'kjhtml'],
+    port: 9876,
+    colors: true,
+    logLevel: config.LOG_INFO,
+    autoWatch: true,
+    browsers: (process.env.KARMA_BROWSERS || 'Chrome').split(','),
+    singleRun: process.env.KARMA_SINGLE_RUN || false
+  });
+};
+----
+
+There are several modifications we had to make.
+
+First is to make `hostname` configurable. When we run tests locally from our console with `ng test` it's fine to use localhost,
+because the browser runs on the same machine. When tests run in Docker containers and browser resides in a different container
+than karma (which is serving content for the browser) then Karma needs to tell the browser it's container hostname or IP.
+Hence we modify this line: `hostname: getIp() || 'localhost',`. The `getIp` script gets IP of first public network interface
+it can find.
+
+The second change is to register `karma-webdriver-launcher` plugin which is required by our third change.
+We don't want karma to start local browser but to use remote WebDriver running in a separate container.
+This is the whole section with `customLaunchers`.
+
+The fourth change is to make `browsers` configurable. Locally we want to use `Chrome` while inside docker we need `selenium_chrome`.
+
+Finally, we want to control the value of `singleRun`.
+
+With this configuration by default is meant for running outside of docker, but if you set several environment variables
+properly you can reuse the same config inside Docker container.
+
+.*getIp.js*
+[source, javascript]
+----
+const os = require('os');
+
+const filter = details => {
+  const isIPv4 = 'IPv4' === details.family;
+  const isInternal = false !== details.internal;
+  return isIPv4 && !isInternal;
+};
+
+module.exports = () => {
+  let address = 'localhost';
+  const devices = os.networkInterfaces();
+  Object.keys(devices).forEach(deviceName => {
+    const details = devices[deviceName].find(filter);
+    if (null != details) {
+      address = details.address
+    }
+  });
+  return address;
+};
+----
+
+This is a simple script that gets the address of a public network interface.
+
+.*package.json*
+
+Finally, we need to add `karma-webdriver-launcher` to our dependencies:
+
+    npm i -DE karma-webdriver-launcher
+
+Now we can run lint and unit tests with Docker:
+
+    docker-compose up --build --exit-code-from frontend
+
+== E2E tests in docker-compose
+
+Running e2e tests inside Docker requires slightly more modifications.
+
+.*docker-compose.yml*
+[source, yaml]
+----
+version: '2'
+services:
+  frontend:
+    build:
+      context: .
+    command: sh -c "npm run lint && npm test && node e2e-ci.js"
+    environment:
+      - ELASTICSEARCH_URL=http://es:9200
+      - KARMA_BROWSERS=selenium_chrome
+      - KARMA_SINGLE_RUN=true
+      - SELENIUM_HOST=selenium
+    depends_on:
+      - selenium
+  backend:
+    build:
+      context: backend
+    command: npm start
+    environment:
+      - ELASTICSEARCH_URL=http://es:9200
+  selenium:
+    image: selenium/standalone-chrome:3.12.0
+    depends_on:
+      - backend
+  es:
+    image: docker.elastic.co/elasticsearch/elasticsearch-oss:6.2.4
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+----
+
+We're adding 2 more containers, backend and ElasticSearch.
+The `backend` needs to have `ELASTICSEARCH_URL` environment variable configured to point to the `es` container,
+Same applies to the `frontend` because it will be seeding ElasticSearch with test data.
+
+.*Dockerfile*
+[source, text]
+----
+FROM node:8.9
+
+WORKDIR /app
+CMD node app/web.js
+
+COPY backend/package.json backend/yarn.lock ./backend/
+RUN cd backend && yarn install
+
+COPY package.json package-lock.json ./
+RUN npm install --progress=false && npm run webdriver-manager-update
+COPY . .
+----
+
+Because e2e tests use seeder from `backend` submodule, we need to install `npm` dependencies in that subdirectory.
+Also, we don't want protractor to fetch WebDriver binaries on each container run, so we include those inside the
+Docker image.
+
+.*e2e/protractor.conf.js*
+[source, javascript]
+----
+// Protractor configuration file, see link for more information
+// https://github.com/angular/protractor/blob/master/lib/config.ts
+
+const { SpecReporter } = require('jasmine-spec-reporter');
+
+const getIp = require('../getIp');
+
+const address = process.env.SELENIUM_HOST && getIp() || 'localhost';
+
+const directConnect = !process.env.SELENIUM_HOST;
+
+exports.config = {
+  allScriptsTimeout: 11000,
+  specs: [
+    './src/index.e2e-spec.ts',
+    './src/**/*.e2e-spec.ts'
+  ],
+  capabilities: {
+    'browserName': 'chrome'
+  },
+  directConnect,
+  seleniumAddress: `http://${process.env.SELENIUM_HOST || 'localhost'}:4444/wd/hub`,
+  baseUrl: `http://${address}:4200/`,
+  framework: 'jasmine',
+  jasmineNodeOpts: {
+    showColors: true,
+    defaultTimeoutInterval: 30000,
+    print: function () {
+    }
+  },
+  onPrepare() {
+    require('ts-node').register({
+      project: require('path').join(__dirname, './tsconfig.e2e.json')
+    });
+    jasmine.getEnv().addReporter(new SpecReporter({ spec: { displayStacktrace: true } }));
+  }
+};
+----
+
+There are two changes here. First is the `seleniumAddress`. With default local runs, WebDriver runs on localhost,
+ however, with Docker it runs in a separate container, so we need to pass that container's hostname.
+The second change is `baseUrl`. Inside Docker, the browser runs in `selenium` container but it needs to access
+the web server, which runs inside `frontend` container.
+
+.*src/environments/environment.ci.ts*
+[source, typescript]
+----
+export const environment = {
+  production: true,
+  backendUrl: 'http://backend:3000'
+};
+----
+
+`ApiService` uses `environment` to know what is the root of the backend URL.
+
+.*angular.json*
+[source, json]
+----
+{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "version": 1,
+  "newProjectRoot": "projects",
+  "projects": {
+    "angular-testing-frontend": {
+      "root": "",
+      "sourceRoot": "src",
+      "projectType": "application",
+      "prefix": "app",
+      "schematics": {},
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:browser",
+          "options": {
+            "outputPath": "dist/angular-testing-frontend",
+            "index": "src/index.html",
+            "main": "src/main.ts",
+            "polyfills": "src/polyfills.ts",
+            "tsConfig": "src/tsconfig.app.json",
+            "assets": [
+              "src/favicon.ico",
+              "src/assets"
+            ],
+            "styles": [
+              "src/styles.css"
+            ],
+            "scripts": []
+          },
+          "configurations": {
+            "production": {
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.prod.ts"
+                }
+              ],
+              "optimization": true,
+              "outputHashing": "all",
+              "sourceMap": false,
+              "extractCss": true,
+              "namedChunks": false,
+              "aot": true,
+              "extractLicenses": true,
+              "vendorChunk": false,
+              "buildOptimizer": true
+            },
+            "ci": {
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.ci.ts"
+                }
+              ],
+              "aot": true
+            }
+          }
+        },
+        "serve": {
+          "builder": "@angular-devkit/build-angular:dev-server",
+          "options": {
+            "browserTarget": "angular-testing-frontend:build"
+          },
+          "configurations": {
+            "production": {
+              "browserTarget": "angular-testing-frontend:build:production"
+            },
+            "ci": {
+              "browserTarget": "angular-testing-frontend:build:ci"
+            }
+          }
+        },
+        "extract-i18n": {
+          "builder": "@angular-devkit/build-angular:extract-i18n",
+          "options": {
+            "browserTarget": "angular-testing-frontend:build"
+          }
+        },
+        "test": {
+          "builder": "@angular-devkit/build-angular:karma",
+          "options": {
+            "main": "src/test.ts",
+            "polyfills": "src/polyfills.ts",
+            "tsConfig": "src/tsconfig.spec.json",
+            "karmaConfig": "src/karma.conf.js",
+            "styles": [
+              "src/styles.css"
+            ],
+            "scripts": [],
+            "assets": [
+              "src/favicon.ico",
+              "src/assets"
+            ]
+          }
+        },
+        "lint": {
+          "builder": "@angular-devkit/build-angular:tslint",
+          "options": {
+            "tsConfig": [
+              "src/tsconfig.app.json",
+              "src/tsconfig.spec.json"
+            ],
+            "exclude": [
+              "**/node_modules/**"
+            ]
+          }
+        }
+      }
+    },
+    "angular-testing-frontend-e2e": {
+      "root": "e2e/",
+      "projectType": "application",
+      "architect": {
+        "e2e": {
+          "builder": "@angular-devkit/build-angular:protractor",
+          "options": {
+            "protractorConfig": "e2e/protractor.conf.js",
+            "devServerTarget": "angular-testing-frontend:serve"
+          },
+          "configurations": {
+            "production": {
+              "devServerTarget": "angular-testing-frontend:serve:production"
+            },
+            "ci": {
+              "devServerTarget": "angular-testing-frontend:serve:ci"
+            }
+          }
+        },
+        "lint": {
+          "builder": "@angular-devkit/build-angular:tslint",
+          "options": {
+            "tsConfig": "e2e/tsconfig.e2e.json",
+            "exclude": [
+              "**/node_modules/**"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "defaultProject": "angular-testing-frontend"
+}
+----
+
+In short, we're instructing angular to use `environment.ci.ts` file when `-c ci` flag is passed to `ng`.
+
+.*e2e-ci.js*
+[source, javascript]
+----
+const ng = require('@angular/cli');
+
+const getIp = require('./getIp');
+
+ng.default({ cliArgs: ['e2e', '-c', 'ci', '--host', `${getIp() || 'localhost'}`] })
+  .then(exitCode => process.exit(exitCode))
+  .catch(e => {
+    console.error(e);
+    process.exit(127);
+  });
+----
+As you may have noticed inside `docker-compose.yml`, we've added `node e2e-ci.js` to the `command`.
+Normally `ng e2e` starts web server hosting our app's files on `localhost`, but since WebDriver runs
+in different Docker container, we have to serve those files on something reachable from the outside.
+This script runs `ng e2e` with proper hostname.
+
+NOTE: In Linux you could add following script to `package.json`: `"e2e-ci": "ng e2e -c ci --host $(node -e 'console.log(require(\"./getIp\")())')"`
+and you should be able to run `npm run e2e-ci` instead of `node e2e-ci.js`.
+https://app.codeship.com/projects/302318/project_setup_steps/setup_scm?provider=github
+.*package.json*
+[source, json]
+----
+{
+  "name": "angular-testing-frontend",
+  "version": "0.0.0",
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve",
+    "build": "ng build",
+    "test": "ng test",
+    "lint": "ng lint",
+    "e2e": "ng e2e",
+    "webdriver-manager-update": "webdriver-manager update --chrome"
+  },
+  "private": true,
+  "dependencies": {
+    "@angular/animations": "^6.0.3",
+    "@angular/common": "^6.0.3",
+    "@angular/compiler": "^6.0.3",
+    "@angular/core": "^6.0.3",
+    "@angular/forms": "^6.0.3",
+    "@angular/http": "^6.0.3",
+    "@angular/platform-browser": "^6.0.3",
+    "@angular/platform-browser-dynamic": "^6.0.3",
+    "@angular/router": "^6.0.3",
+    "core-js": "^2.5.4",
+    "rxjs": "^6.0.0",
+    "zone.js": "^0.8.26"
+  },
+  "devDependencies": {
+    "@angular-devkit/build-angular": "~0.6.8",
+    "@angular/cli": "~6.0.8",
+    "@angular/compiler-cli": "^6.0.3",
+    "@angular/language-service": "^6.0.3",
+    "@types/jasmine": "~2.8.6",
+    "@types/jasminewd2": "~2.0.3",
+    "@types/node": "~8.9.4",
+    "codelyzer": "~4.2.1",
+    "jasmine-core": "~2.99.1",
+    "jasmine-spec-reporter": "~4.2.1",
+    "karma": "~1.7.1",
+    "karma-chrome-launcher": "~2.2.0",
+    "karma-coverage-istanbul-reporter": "~2.0.0",
+    "karma-jasmine": "~1.1.1",
+    "karma-jasmine-html-reporter": "^0.2.2",
+    "karma-webdriver-launcher": "1.0.5",
+    "protractor": "~5.3.0",
+    "ts-node": "~5.0.1",
+    "tslint": "~5.9.1",
+    "typescript": "~2.7.2"
+  }
+}
+----
+
+We've added `"webdriver-manager-update": "webdriver-manager update --chrome"`.
+
+Now you can try running lint, unit and e2e tests inside docker container with the same command as before:
+
+    docker-compose up --build --exit-code-from frontend
+
+== Lint, unit and e2e tests in CodeShip
+
+CodeShip is my favorite CI. It uses Docker to run whatever you want and seamlessly integrates with GitHub.
+
+NOTE: Find a more detailed introduction to CodeShip Pro here: https://documentation.codeship.com/pro/.
+
+It needs just two files.
+
+.*codeship-steps.yml*
+[source, yaml]
+----
+- name: lint
+  service: frontend-lint
+  command: npm run lint
+- name: unit-tests
+  service: frontend-unit-test
+  command: npm run test
+- name: e2e-tests
+  service: frontend-e2e-test
+  command: node e2e-ci.js
+----
+It tells CodeShip to run the build in 3 steps, one after the other.
+It is slower but doesn't consume so many resources and thus can be run on slower machines.
+
+.*codeship-services.yml*
+[source, yaml]
+----
+frontend-lint:
+  build:
+    image: angular-testing-frontend
+    context: .
+    dockerfile: Dockerfile
+  cached: true
+frontend-unit-test:
+  build:
+    image: angular-testing-frontend
+    context: .
+    dockerfile: Dockerfile
+  cached: true
+  environment:
+    - KARMA_BROWSERS=selenium_chrome
+    - KARMA_SINGLE_RUN=true
+    - SELENIUM_HOST=selenium-unit-test
+  depends_on:
+    - selenium-unit-test
+frontend-e2e-test:
+  build:
+    image: angular-testing-frontend
+    context: .
+    dockerfile: Dockerfile
+  cached: true
+  environment:
+    - ELASTICSEARCH_URL=http://elasticsearch:9200/
+    - SELENIUM_HOST=selenium-e2e-test
+  depends_on:
+    - selenium-e2e-test
+    - backend
+backend:
+  build:
+    image: angular-testing-backend
+    context: backend
+    dockerfile: Dockerfile
+  cached: true
+  environment:
+    - ELASTICSEARCH_URL=http://elasticsearch:9200/
+  depends_on:
+    - elasticsearch
+selenium-unit-test:
+  image: selenium/standalone-chrome:3.12.0
+  cached: true
+selenium-e2e-test:
+  image: selenium/standalone-chrome:3.12.0
+  cached: true
+  depends_on:
+    - backend
+elasticsearch:
+  image: docker.elastic.co/elasticsearch/elasticsearch-oss:6.2.4
+  environment:
+    - discovery.type=single-node
+    - bootstrap.memory_lock=true
+    - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+----
+
+This is the definition of available containers. It is very similar to Docker Compose format.
+
+Now install `jet` and run `jet steps` to mimic CodeShip build locally.
+
+NOTE: To learn how to install `jet`, visit https://documentation.codeship.com/pro/jet-cli/installation/
+
+If you want CodeShip to verify your commits automatically go to https://app.codeship.com and set up your project.
+It's as simple as selecting one of your repose through autocomplete.
+
+=== Force CI build passing for each pull request
+
+We don't want to allow merging any pull request that does not pass CI.
+
+Got to your GitHub repository settings. Click on `Branches` menu item.
+Click `Add rule` button. Enter `develop` (or `master`) in `Apply rule to` input.
+Check `Require status checks to pass before merging`
+Check `continuous-integration/codeship`.
+Click `Create` button.
+
+== Coverage report and coveralls
+
+A default configuration of Angular includes coverage reports. Simply run:
+
+    ng test --code-coverage --watch=false
+
+You can find coverage report inside `/coverage` folder.
+
+If you want to force additional check to keep certain coverage threshold or to prevent code coverage decrease,
+create an account at https://coveralls.io/, link with your GitHub account and create a new project.
+
+In this tutorial we want coverage report to be automatically uploaded to Coveralls on each build from CodeShip.
+
+First, add following scripts to `package.json`:
+
+    "coverage": "ng test --code-coverage --watch=false",
+    "postcoverage": "if test ${CI_NAME+x} ; then COVERALLS_SERVICE_NAME=Codeship COVERALLS_GIT_COMMIT=$CI_COMMIT_ID COVERALLS_SERVICE_JOB_ID=$CI_BUILD_ID cat ./coverage/lcov.info | ./node_modules/coveralls/bin/coveralls.js; fi",
+
+Now you need to make `COVERALLS_REPO_TOKEN` environment variable available during the build.
+You can find that token in Coveralls project details.
+The problem is that you should not expose that token publicly.
+CodeShip allows you to provide encrypted file with environment variables.
+
+NOTE: For more details on encrypted environment variables read this: https://documentation.codeship.com/pro/builds-and-configuration/environment-variables/#encrypted-environment-variables
+
+Create `codeship.env` file and put `COVERALLS_REPO_TOKEN=xxx` in it, where xxx should be the token you obtain from
+Coveralls project.
+
+Go to your CodeShip project settings general tab and download the AES key which will be used for symetric encryption.
+Copy that downloaded key to `angular-testing-frontend` directory and rename the file to `codeship.aes`.
+
+Now encrypt that file
+
+    jet encrypt codeship.env codeship.env.encrypted
+
+NOTE: `codeship.env.encrypted` file should be committed into the git repository
+
+.*codeship-services.yml*
+[source, yaml]
+----
+...
+frontend-unit-test:
+  build:
+    image: angular-testing-frontend
+    context: .
+    dockerfile: Dockerfile
+  cached: true
+  environment:
+    - KARMA_BROWSERS=selenium_chrome
+    - KARMA_SINGLE_RUN=true
+    - SELENIUM_HOST=selenium-unit-test
+  encrypted_env_file: codeship.env.encrypted
+  depends_on:
+    - selenium-unit-test
+...
+----
+
+We've instructed CodeShip to load environment variables from the encrypted file.
+It would be a good idea to add `codeship.env` and `codeship.aes` files to `.dockerignore` and `.gitignore` so that
+they don't get accidentally committed.
+
+Next, modify `codeship-steps.yml`. Change command of `unit-tests` step to `npm run coverage`:
+
+.*codeship-steps.yml*
+[source, yaml]
+----
+- name: lint
+  service: frontend-lint
+  command: npm run lint
+- name: unit-tests
+  service: frontend-unit-test
+  command: npm run coverage
+- name: e2e-tests
+  service: frontend-e2e-test
+  command: node e2e-ci.js
+----
+
+Finally, add `coveralls` as `npm` dependency:
+
+    npm i -DE coveralls
+
+Now whenever the build happens in CodeShip, or when you run `jet` locally, the coverage report will be pushed to
+Coveralls.
+
+=== Add Coveralls status checks for each pull request
+
+We don't want to allow merging any pull request that decreases coverage.
+
+Got to your GitHub repository settings. Click on `Branches` menu item.
+Click `Edit` button next to develop or master branch.
+Check `coverage/coveralls` under `Require status checks to pass before merging` section.
+Click `Save changes` button.
+
+== Mutation tests
+
+Coverage is excellent, but it just measures if your tests have invoked given statement.
+Your tests might completely ignore the outcome of that invocation if it happened or not.
+You can't tell if your tests are guarding given statement or not just by looking at coverage report.
+Here's where mutation tests come to help.
+
+The idea is to mutate one statement, i.e. substitute `if( a > b )` with `if( a < b )` and run the tests.
+If tests fail, it means that they were guarding that statement. If they pass, it means they were not guarding that statement
+at all.
+
+Because there are tons of statements in real life app, then mutation tests take very long to run.
+
+Stryker is a library that does that repetitive and time-consuming task for you.
+
+Install Stryker and some handy plugins:
+
+    npm i -DE stryker stryker-api stryker-karma-runner stryker-typescript stryker-html-reporter
+
+Stryker might require `@angular/cli` update so run following commands:
+
+    ng update @angular/cli
+    ng update @angular-devkit/build-angular
+
+Add stryker.conf.js
+
+.*stryker.conf.js*
+[source, javascript]
+----
+module.exports = function (config) {
+  config.set({
+    files: ['*', 'src/**/*'],
+    mutate: [
+      'src/app/**/*.ts',
+      '!src/**/*.spec.ts',
+      '!src/test.ts',
+      '!src/environments/*.ts'
+    ],
+    testRunner: 'karma',
+    mutator: 'typescript',
+    port: 9336,
+    karma: {
+      configFile: 'src/karma.conf.js',
+      project: 'angular-cli',
+      config: {
+        browsers: ['ChromeHeadless']
+      }
+    },
+    reporter: ['progress', 'html'],
+    coverageAnalysis: 'off',
+    maxConcurrentTestRunners: 1,
+    fileLogLevel: 'trace'
+  });
+};
+----
+
+Add following script to `package.json`:
+
+    "mutation-test": "stryker run",
+
+Now run
+
+    npm run mutation-test
+
+The output should be something like this:
+[source, text]
+----
+> angular-testing-frontend@0.0.0 mutation-test /home/bernard/projects/angular-testing/angular-testing-frontend
+> stryker run
+
+22:08:18 (21937) INFO ConfigReader Using stryker.conf.js in the current working directory.
+22:08:18 (21937) INFO InputFileResolver Found 3 of 35 file(s) to be mutated.
+22:08:18 (21937) INFO InitialTestExecutor Starting initial test run. This may take a while.
+22:08:20 (21947) INFO stryker-karma.conf.js Importing config from "/home/bernard/projects/angular-testing/angular-testing-frontend/.stryker-tmp/sandbox693275/src/karma.conf.js"
+22:08:25 (21937) INFO InitialTestExecutor Initial test run succeeded. Ran 4 tests in 6 seconds (net 111 ms, overhead 245 ms).
+22:08:25 (21937) INFO Stryker 17 Mutant(s) generated
+22:08:25 (21937) INFO SandboxPool Creating 1 test runners (based on maxConcurrentTestRunners config)
+22:08:26 (22032) INFO stryker-karma.conf.js Importing config from "/home/bernard/projects/angular-testing/angular-testing-frontend/.stryker-tmp/sandbox7450937/src/karma.conf.js"
+Mutation testing  [==================================================] 100% (ETC 0.0s) 17/17 tested (10 survived)
+22:08:40 (21937) INFO HtmlReporter Your report can be found at: file:///home/bernard/projects/angular-testing/angular-testing-frontend/reports/mutation/html/index.html
+22:08:40 (21937) INFO Stryker Done in 21 seconds.
+----
+
+You can find the report inside `reports/mutation/html/index.html`.
+
+I separate pure unit tests from component tests that run in TestBed because
+the latter is much slower. I try to keep 100% coverage with pure unit tests and thus
+I run mutation tests only using those tests.
+
+== Summary
+
+That's it. I hope this article saves you much time it took me to figure this all out.
+Post your comments as https://github.com/blabno/angular-testing-frontend/issues[issues].
